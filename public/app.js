@@ -304,6 +304,94 @@ toggleBtn.addEventListener('click', () => {
 // 초기: 용어집 접혀있음
 setGlossaryVisibility(false);
 
+// ---------- 큰 .docx: 브라우저에서 텍스트 추출 (Vercel 4.5MB 한도 우회) ----------
+// 서버 파싱(mammoth) 로직을 word/document.xml 기준으로 미러링.
+const BIG_FILE_BYTES = 4 * 1024 * 1024; // 합계 4MB 초과 시 텍스트 추출 경로 사용
+
+function xmlHasHangul(s) {
+  return /[가-힣]/.test(s);
+}
+
+function paraText(pEl) {
+  const ts = pEl.getElementsByTagName('w:t');
+  let s = '';
+  for (let i = 0; i < ts.length; i++) s += ts[i].textContent;
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+async function docxToXmlDoc(file) {
+  if (typeof JSZip === 'undefined') throw new Error('JSZip 로드 실패(네트워크 확인)');
+  const zip = await JSZip.loadAsync(file);
+  const docEntry = zip.file('word/document.xml');
+  if (!docEntry) throw new Error('word/document.xml 없음');
+  const xml = await docEntry.async('string');
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) throw new Error('document.xml 파싱 실패');
+  return doc;
+}
+
+// 모든 문단 텍스트(표 셀 포함) — 서버 docxToParagraphs 대응
+function xmlParagraphs(doc) {
+  const out = [];
+  const ps = doc.getElementsByTagName('w:p');
+  for (let i = 0; i < ps.length; i++) {
+    const t = paraText(ps[i]);
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+// 병기 표(EN→KO) 페어 추출 — 서버 extractBilingualPairs 대응
+function xmlBilingualPairs(doc) {
+  const pairs = [];
+  const isNoise = (s) => !s || /^\d+$/.test(s) || /^https?:\/\//i.test(s);
+  const cells = doc.getElementsByTagName('w:tc');
+  for (let c = 0; c < cells.length; c++) {
+    const psEls = cells[c].getElementsByTagName('w:p');
+    const ps = [];
+    for (let i = 0; i < psEls.length; i++) {
+      const t = paraText(psEls[i]);
+      if (t) ps.push(t);
+    }
+    let i = 0;
+    while (i < ps.length) {
+      if (!xmlHasHangul(ps[i])) {
+        const en = [];
+        while (i < ps.length && !xmlHasHangul(ps[i])) en.push(ps[i++]);
+        const ko = [];
+        while (i < ps.length && xmlHasHangul(ps[i])) ko.push(ps[i++]);
+        const src = en.join(' ').trim();
+        const tgt = ko.join(' ').trim();
+        if (isNoise(src) && !tgt) continue;
+        pairs.push({ src, tgt });
+      } else {
+        const ko = [];
+        while (i < ps.length && xmlHasHangul(ps[i])) ko.push(ps[i++]);
+        pairs.push({ src: '', tgt: ko.join(' ').trim() });
+      }
+    }
+  }
+  return pairs.filter((p) => p.src || p.tgt);
+}
+
+function isBilingualPairs(pairs) {
+  return pairs.filter((p) => p.src && p.tgt).length >= 3;
+}
+
+// 원문/번역 파일 → 정렬된 srcUnits/tgtUnits (서버 /api/check 결정 로직 미러)
+async function extractUnitsClient(srcFile, tgtFile) {
+  const [srcDoc, tgtDoc] = await Promise.all([docxToXmlDoc(srcFile), docxToXmlDoc(tgtFile)]);
+  const srcPairs = xmlBilingualPairs(srcDoc);
+  const tgtPairs = xmlBilingualPairs(tgtDoc);
+  if (isBilingualPairs(tgtPairs)) {
+    return { srcUnits: tgtPairs.map((p) => p.src), tgtUnits: tgtPairs.map((p) => p.tgt) };
+  }
+  if (isBilingualPairs(srcPairs)) {
+    return { srcUnits: srcPairs.map((p) => p.src), tgtUnits: srcPairs.map((p) => p.tgt) };
+  }
+  return { srcUnits: xmlParagraphs(srcDoc), tgtUnits: xmlParagraphs(tgtDoc) };
+}
+
 // ---------- 검수 ----------
 async function performCheck() {
   if (!sourceFile.files[0] || !targetFile.files[0]) {
@@ -314,21 +402,59 @@ async function performCheck() {
     showStatus('error', '지원하지 않는 형식입니다. .docx 파일만 업로드할 수 있습니다.');
     return false;
   }
-  const fd = new FormData();
-  fd.append('source', sourceFile.files[0]);
-  fd.append('target', targetFile.files[0]);
-  if (glossaryData && glossaryData.length) {
-    fd.append('glossary', JSON.stringify(glossaryData));
-  }
+  const totalBytes = (sourceFile.files[0].size || 0) + (targetFile.files[0].size || 0);
+  const useTextExtract = totalBytes > BIG_FILE_BYTES; // 큰 파일 → 브라우저 텍스트 추출 경로
 
-  showStatus('info', '검수 중...');
+  showStatus('info', useTextExtract ? '큰 파일 — 브라우저에서 텍스트 추출 중...' : '검수 중...');
   checkBtn.disabled = true;
   try {
-    const res = await fetch('/api/check', { method: 'POST', body: fd });
-    const data = await res.json();
-    if (!res.ok) {
-      showStatus('error', data.error || '검수 실패');
+    let res;
+    if (useTextExtract) {
+      // 원본 대신 추출한 텍스트(작은 JSON)만 전송 → Vercel 용량 한도 우회
+      const { srcUnits, tgtUnits } = await extractUnitsClient(
+        sourceFile.files[0],
+        targetFile.files[0]
+      );
+      showStatus('info', '검수 중...');
+      res = await fetch('/api/check-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ srcUnits, tgtUnits, glossary: glossaryData || [] }),
+      });
+    } else {
+      const fd = new FormData();
+      fd.append('source', sourceFile.files[0]);
+      fd.append('target', targetFile.files[0]);
+      if (glossaryData && glossaryData.length) {
+        fd.append('glossary', JSON.stringify(glossaryData));
+      }
+      res = await fetch('/api/check', { method: 'POST', body: fd });
+    }
+
+    const ct = res.headers.get('content-type') || '';
+    // Vercel 413(Request Entity Too Large)은 JSON이 아닌 텍스트로 응답 → JSON.parse 실패 방지
+    if (!res.ok || !ct.includes('application/json')) {
+      const txt = await res.text().catch(() => '');
+      if (res.status === 413 || /too large|entity too large/i.test(txt)) {
+        const mb = (totalBytes / (1024 * 1024)).toFixed(1);
+        showStatus(
+          'error',
+          `파일이 너무 큽니다(전송 ${mb}MB). 온라인(Vercel) 검수는 요청당 4.5MB까지만 가능합니다. ` +
+            `이미지가 많은 .docx는 로컬 실행(npm start → http://localhost:3000)에서 검수하세요.`
+        );
+      } else {
+        showStatus('error', '검수 실패: ' + (txt.slice(0, 200) || `HTTP ${res.status}`));
+      }
       return false;
+    }
+    const data = await res.json();
+    if (useTextExtract) {
+      // 텍스트 추출 경로는 원본 파일이 서버에 없어 수정본(.docx) 내보내기 불가
+      exportBtn.disabled = true;
+      exportBtn.title = '큰 파일은 텍스트 추출로 검수됨 — 수정본 다운로드는 로컬 실행에서 하세요.';
+    } else {
+      exportBtn.disabled = false;
+      exportBtn.title = '';
     }
     render(data);
     return true;

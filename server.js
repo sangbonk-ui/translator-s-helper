@@ -683,6 +683,57 @@ app.post('/api/check-bilingual', upload.single('doc'), async (req, res) => {
   }
 });
 
+// 서버 용어집 로드 + 클라이언트 용어집(있으면) 우선 적용.
+async function resolveGlossary(clientGlossaryRaw) {
+  let { entries: glossary, files } = await loadGlossary();
+  if (clientGlossaryRaw) {
+    try {
+      const clientGlossary = JSON.parse(clientGlossaryRaw);
+      if (Array.isArray(clientGlossary) && clientGlossary.length > 0) {
+        glossary = clientGlossary;
+      }
+    } catch (e) {
+      // 잘못된 클라 용어집 JSON은 무시하고 서버 용어집 사용
+    }
+  }
+  return { glossary, files };
+}
+
+// 정렬된 원문/번역 단위 배열 → 용어집 검수 결과(out) 조립. (파일 파싱 이후 공통 파이프라인)
+async function buildCheckResult(srcUnits, tgtUnits, glossary, files) {
+  const out = await checkGlossary(srcUnits, tgtUnits, glossary);
+
+  const n = Math.max(srcUnits.length, tgtUnits.length);
+  const alignedPairs = [];
+  for (let i = 0; i < n; i++) {
+    const src = srcUnits[i] || '';
+    const tgt = tgtUnits[i] || '';
+    if (src && tgt && src.trim() === tgt.trim()) continue;
+    alignedPairs.push({ src, tgt });
+  }
+
+  for (const r of out.results) {
+    if (r.entry.type !== 'term') continue;
+    const supers = superSources(r.entry.source, glossary);
+    const matches = alignedPairs.filter(
+      (p) => p.src && contains(maskSuperTerms(p.src, supers), r.entry.source)
+    );
+    r.matchCount = r.srcCount != null ? r.srcCount : r.srcHits ? r.srcHits.length : matches.length;
+    r.pairs = matches
+      .filter((p) => !(p.src && p.tgt && p.src.trim() === p.tgt.trim()))
+      .map((p) => ({
+        src: p.src,
+        tgt: p.tgt,
+        ok: targetHasExpected(p.tgt, r.entry.target) === true,
+      }));
+  }
+
+  out.alignedPairs = alignedPairs;
+  out.glossaryFiles = files;
+  out.style = checkStyle(tgtUnits);
+  return out;
+}
+
 app.post(
   '/api/check',
   upload.fields([
@@ -704,17 +755,7 @@ app.post(
           error: '지원하지 않는 형식입니다. .docx 파일만 업로드할 수 있습니다.',
         });
 
-      let { entries: glossary, files } = await loadGlossary();
-      if (req.body && req.body.glossary) {
-        try {
-          const clientGlossary = JSON.parse(req.body.glossary);
-          if (Array.isArray(clientGlossary) && clientGlossary.length > 0) {
-            glossary = clientGlossary;
-          }
-        } catch (e) {
-          // invalid client glossary JSON; ignore and continue with server glossary
-        }
-      }
+      const { glossary, files } = await resolveGlossary(req.body && req.body.glossary);
       if (glossary.length === 0)
         return res.status(400).json({
           error:
@@ -748,41 +789,7 @@ app.post(
           error: '문서에서 텍스트를 추출하지 못했습니다. 파일을 확인하세요.',
         });
 
-      // 용어집 기준 검수 — 미준수 용어별 결과 + 정렬 쌍(원문↔번역) 첨부.
-      const out = await checkGlossary(srcUnits, tgtUnits, glossary);
-
-      // 인덱스 정렬 쌍(병기=EN/KO 열, 분리=단락 평행). 용어별 원문 출현 + 대응 번역.
-      const n = Math.max(srcUnits.length, tgtUnits.length);
-      const alignedPairs = [];
-      for (let i = 0; i < n; i++) {
-        const src = srcUnits[i] || '';
-        const tgt = tgtUnits[i] || '';
-        if (src && tgt && src.trim() === tgt.trim()) continue;
-        alignedPairs.push({ src, tgt });
-      }
-
-      for (const r of out.results) {
-        if (r.entry.type !== 'term') continue;
-        // 상위 용어(예: "mad cow disease")에 포함된 짧은 용어("cow")는 그 문장을 미준수로 잡지 않음.
-        const supers = superSources(r.entry.source, glossary);
-        const matches = alignedPairs.filter(
-          (p) => p.src && contains(maskSuperTerms(p.src, supers), r.entry.source)
-        );
-        r.matchCount = r.srcCount != null ? r.srcCount : r.srcHits ? r.srcHits.length : matches.length;
-        // 상한 없음 — 해당 문장 모두. ok=false(기대 번역어 미사용)가 수정 대상.
-        r.pairs = matches
-          .filter((p) => !(p.src && p.tgt && p.src.trim() === p.tgt.trim()))
-          .map((p) => ({
-            src: p.src,
-            tgt: p.tgt,
-            ok: targetHasExpected(p.tgt, r.entry.target) === true,
-          }));
-      }
-
-      out.alignedPairs = alignedPairs;
-      out.glossaryFiles = files;
-      // 문체(평서체/경어체) 검수 — 번역문 문장 종결어 기준 분류.
-      out.style = checkStyle(tgtUnits);
+      const out = await buildCheckResult(srcUnits, tgtUnits, glossary, files);
       res.json(out);
     } catch (err) {
       console.error(err);
@@ -792,6 +799,36 @@ app.post(
     }
   }
 );
+
+// 큰 .docx(이미지 포함)를 Vercel 4.5MB 한도 없이 검수하기 위한 경로.
+// 클라이언트가 브라우저에서 문서 텍스트를 미리 추출해 srcUnits/tgtUnits(문자열 배열)로 전송.
+// 파일 업로드 대신 작은 JSON만 오가므로 용량 무관. (수정본 .docx 내보내기는 원본 필요 → 로컬 사용)
+app.post('/api/check-text', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const srcUnits = Array.isArray(b.srcUnits) ? b.srcUnits.filter((s) => s && s.trim()) : [];
+    const tgtUnits = Array.isArray(b.tgtUnits) ? b.tgtUnits.filter((s) => s && s.trim()) : [];
+
+    if (srcUnits.length === 0 && tgtUnits.length === 0)
+      return res.status(400).json({
+        error: '문서에서 텍스트를 추출하지 못했습니다. 파일을 확인하세요.',
+      });
+
+    const { glossary, files } = await resolveGlossary(
+      b.glossary ? (typeof b.glossary === 'string' ? b.glossary : JSON.stringify(b.glossary)) : null
+    );
+    if (glossary.length === 0)
+      return res.status(400).json({
+        error: 'verification 폴더에서 용어집을 불러오지 못했습니다. .docx 용어집을 확인하세요.',
+      });
+
+    const out = await buildCheckResult(srcUnits, tgtUnits, glossary, files);
+    res.json(out);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: '검수 처리 중 오류가 발생했습니다: ' + err.message });
+  }
+});
 
 // 편집 전/후 텍스트에서 바뀐 "토큰"을 추출(공백 경계까지 확장).
 // 예: "관할 사업장에 대해" → "관할 작업장에 대해"  ⇒  find:"사업장에" replace:"작업장에".
