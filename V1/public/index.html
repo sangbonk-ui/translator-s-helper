@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>번역 준수 검수</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>식약처 가축 검역 설문서 — 번역 준수 검수</h1>
+      <p class="sub">
+        원문·번역문(.docx)을 좌우 슬롯에 올리고 검수하면, 용어집(verification
+        폴더) 기준으로 미준수 표현을 좌우 대응으로 표시합니다. <b>영한병기 파일</b>은
+        같은 파일을 원문·번역문 양쪽에 각각 올리세요 (원문=영문 열, 번역문=한글 열로
+        자동 추출).
+      </p>
+    </header>
+
+    <main>
+      <section class="controls">
+        <label>원문 <input type="file" id="sourceFile" accept=".docx" /></label>
+        <label>번역문 <input type="file" id="targetFile" accept=".docx" /></label>
+        <button id="checkBtn">검수 시작</button>
+        <button id="exportBtn" class="secondary" hidden>수정본 다운로드</button>
+      </section>
+
+      <div id="noteBanner" class="note-banner" hidden></div>
+
+      <!-- 용어집 기준 미준수: 용어별로 원문↔번역문 문장을 좌우 행 매칭, 번역문 인라인 수정 -->
+      <section id="alignedView" class="align-section hidden">
+        <div class="align-head">
+          <h2>원문/번역 전체 좌우 뷰</h2>
+        </div>
+        <div class="align-table-wrap">
+          <table id="alignedTable" class="align-table">
+            <thead>
+              <tr><th>#</th><th>원문</th><th>번역문</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="resultArea" class="result-area">
+        <p class="placeholder">
+          원문·번역문(.docx)을 올리고 검수 시작을 누르면, 용어집 기준 미준수 문장이
+          원문(좌)↔번역문(우)으로 매칭되어 표시됩니다. 영한병기 파일은 같은 파일을
+          양쪽에 올리세요.
+        </p>
+      </section>
+
+      <!-- 하단: 번역 준수 기준(용어집) -->
+      <section class="bottom">
+        <div class="bottom-head">
+          <h2>번역 준수 기준 — 용어집</h2>
+          <button id="reloadBtn" class="secondary">용어집 새로고침</button>
+        </div>
+        <p class="hint">
+          verification 폴더의 .docx 용어집을 자동으로 불러옵니다. 파일을 추가하면
+          새로고침 시 확장됩니다. (term = 자동 검사, note = 수동 검토 기준)
+        </p>
+        <table id="glossaryTable">
+          <thead>
+            <tr><th>원문 용어</th><th>번역문 용어 / 기준</th><th>유형</th><th>출처</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <div id="status" class="status"></div>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+const fs=require('fs'),JSZip=require('jszip');
+function docXml(ps){const b=ps.map(p=>`<w:p><w:r><w:t xml:space="preserve">${p.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</w:t></w:r></w:p>`).join('');return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${b}</w:body></w:document>`;}
+async function build(f,ps){const z=new JSZip();z.file('[Content_Types].xml',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);z.folder('_rels').file('.rels',`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);z.folder('word').file('document.xml',docXml(ps));fs.writeFileSync(f,await z.generateAsync({type:'nodebuffer'}));}
+(async()=>{
+await build('fixtures/poly_src.docx',['The annual report must be submitted to the authority.']);
+await build('fixtures/poly_tgt.docx',['연례 보고서를 관할기관에 제출해야 한다.']); // report→보고서(다의어), 신고 아님
+console.log('built poly fixtures');
+})();

@@ -1,0 +1,14 @@
+{
+  "name": "translation-compliance-checker",
+  "version": "1.0.0",
+  "description": "식약처 가축 검역 설문서 번역 준수 검수 웹앱 (규칙 기반)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "mammoth": "^1.7.2",
+    "multer": "^2.2.0"
+  }
+}
