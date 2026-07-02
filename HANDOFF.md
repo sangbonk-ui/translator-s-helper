@@ -1,7 +1,15 @@
 # HANDOFF — 번역 준수 검수 웹앱 (작업 이어가기용)
 
 > 이 파일을 읽으면 바로 실행하고, 현재 구현 상태를 이해할 수 있도록 정리했습니다.
-> 마지막 갱신: 2026-06-29.
+> 마지막 갱신: 2026-07-02.
+
+## 🚀 배포 상태 (2026-07-02 신규)
+- **라이브 URL**: https://translator-s-helper.vercel.app
+- **GitHub**: https://github.com/sangbonk-ui/translator-s-helper (branch `main`)
+- **Vercel 프로젝트**: `alonetwo/translator-s-helper`
+- 로컬 실행은 여전히 `npm start` → `http://localhost:3000`
+- 재배포(코드 변경 후): `npx vercel --prod --yes` (작업 폴더에서)
+- 상세 배포 구조/한계 → 문서 하단 "배포 아키텍처" 참고
 
 ## 개요
 - 프로젝트: 식약처 가축검역 설문서 번역 준수 검수 웹앱
@@ -95,7 +103,7 @@
 - UI에서 `원문/번역 전체 좌우 뷰`는 제거되어, 용어집 기준 미준수 항목 중심 화면으로 구성됨
 - `verification` 용어집 데이터 품질에 따라 검수 정확도가 달라짐
 - `api/check-bilingual` 라우트는 현재 사용되지 않음
-- 엑셀형 편집 기능은 아직 구현되지 않았음
+- 용어집 인라인 편집 = 구현됨. 저장은 브라우저 localStorage(`savedGlossary` 키). 검수 시 `glossaryData`를 `/api/check` FormData로 전송해 서버가 우선 사용. **기기·브라우저별 저장** — 공유 안 됨. xlsx export로 백업 가능.
 - row별 클릭 시 위치 유지가 목표이나, 일부 케이스에서 자동 스크롤이 남아 있을 수 있음
 
 ## 재개 지점 (2026-06-29 종료 시점)
@@ -116,6 +124,30 @@
    - 용어집 편집 및 저장 기능 강화
    - 미준수 항목 highlight/`발급` variant 검증 버그 수정
    - 결과 상태 표시 정리
+
+## 배포 아키텍처 (2026-07-02)
+Express 앱을 Vercel 서버리스 함수로 실행.
+- `vercel.json`: 모든 요청(`/(.*)`)을 `server.js`로 라우팅(@vercel/node). `includeFiles`로 `verification/**`, `public/**`, `gemini.js`를 함수 번들에 포함(런타임 fs 읽기 때문).
+- `server.js` 하단: `if (!process.env.VERCEL) app.listen(...)` — Vercel에선 listen 생략하고 `module.exports = app`. 로컬은 그대로 listen.
+- `public/app.js` 저장 핸들러: `/api/save-glossary` 서버 호출 제거 → localStorage만 저장(서버리스 디스크는 읽기 전용).
+- **환경변수(Vercel Production에 등록됨)**: `GEMINI_API_KEY`, `GEMINI_MODEL`. 로컬 값은 `.env`(gitignore됨)에 있음. Vercel엔 `npx vercel env add ... production`으로 등록.
+
+### 배포 관련 한계 / 미완
+- **서버리스 디스크 읽기 전용**: `/api/save-glossary`([server.js:924])는 fs.writeFileSync 하므로 Vercel에서 여전히 실패. 프론트가 더 이상 호출 안 해서 무해하나, 라우트 자체는 죽은 코드로 남아있음. 서버 영구 저장이 필요하면 Vercel Blob/KV로 교체 필요.
+- **GitHub 자동배포 미연결**: `vercel link` 시 repo 연결 실패(Vercel GitHub 앱 권한/미설치). 지금은 `npx vercel --prod` 수동 재배포만 가능. 자동배포 원하면 Vercel 대시보드 → 프로젝트 → Settings → Git에서 repo 연결.
+- 인증: 로컬에 Vercel CLI 로그인 세션 저장됨. `.env.local`(OIDC 토큰)이 link 과정에서 생성됨 — gitignore 등록됨.
+- 커밋에 `V1/`, `V2-glossary-stable/` 구버전 폴더 포함됨(용량 큼, Vercel 빌드는 루트 `server.js`만 사용해 무해). 정리하려면 별도 커밋으로 gitignore 추가.
+
+## 재개 지점 (2026-07-02 종료 시점)
+- **완료**: Vercel 프로덕션 배포. 라이브 https://translator-s-helper.vercel.app (홈 200, `/api/glossary` 실데이터 반환 확인). 용어집 편집을 localStorage 기반으로 전환해 서버리스에서 작동하게 수정. GitHub `main`에 푸시 완료.
+- **검증됨**: 홈페이지 로드, glossary API가 번들된 `번역준수기준(용어집).xlsx` 파싱 반환. 문법 체크 + VERCEL export 가드 테스트 통과.
+- **아직 안 함(선택)**: 실제 .docx 업로드 E2E를 라이브에서 눈으로 확인 / GitHub 자동배포 연결 / save-glossary 죽은 라우트 정리 / 서버측 용어집 영구 저장(Blob/KV).
+
+### 다음에 바로 이어서 할 후보 (배포 관련)
+1. 라이브에서 원문/번역 .docx 업로드 → 검수 → 편집 → 재검수 E2E 눈 확인
+2. GitHub 자동배포 연결(대시보드에서 repo 연결) → push 시 자동 배포
+3. 용어집 서버 영구·공유 저장 원하면 Vercel Blob 도입(현재는 브라우저별 localStorage만)
+4. `V1/`, `V2-glossary-stable/` repo에서 제외(gitignore) — 용량 정리
 
 ## 참고
 - 현재 작업 상태는 `golden_set.md`와 `loop-log.md`에 정리되어 있음
