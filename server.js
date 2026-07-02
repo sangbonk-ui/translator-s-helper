@@ -386,6 +386,33 @@ function countTermOccurrences(text, term) {
   return count;
 }
 
+// 이 용어(term)를 부분으로 포함하는 더 긴 용어(상위 용어) 목록.
+//  예: term="cow" → ["mad cow disease"]. 짧은 용어의 substring 오매칭 방지용.
+function superSources(term, glossary) {
+  const out = [];
+  for (const e of glossary || []) {
+    const s = e && e.source;
+    if (!s || s === term) continue;
+    if (s.length <= term.length) continue;
+    if (contains(s, term)) out.push(s);
+  }
+  return out;
+}
+
+// text에서 상위 용어 출현부를 공백으로 가림 → 그 안의 짧은 용어 오매칭 방지.
+//  예: "mad cow disease → 광우병" 문장에서 "cow"를 세지 않도록 "mad cow disease"를 마스킹.
+//  (길이 보존 치환으로 인덱스 유지)
+function maskSuperTerms(text, supers) {
+  let masked = String(text || '');
+  for (const s of supers || []) {
+    const re = /^[\x00-\x7F]+$/.test(s)
+      ? new RegExp('(?<=^|[^A-Za-z0-9])' + escRe(s) + '(?=$|[^A-Za-z0-9])', 'gi')
+      : new RegExp(escRe(s), 'gi');
+    masked = masked.replace(re, (m) => ' '.repeat(m.length));
+  }
+  return masked;
+}
+
 // note 기준에서 후보 번역어 추출 (예: "1) 안전 및 보안 수입신고 2) 반입신고 ...")
 function extractCandidates(noteText) {
   const out = [];
@@ -416,10 +443,13 @@ async function checkGlossary(sourceParas, targetParas, glossary) {
     const S = entry.source;
     if (!S) continue;
 
+    // 이 용어를 포함하는 더 긴 용어(예: "cow"에 대한 "mad cow disease")는 별도 용어이므로
+    // 원문에서 그 출현부를 가려 짧은 용어의 오매칭(오탐)을 막는다.
+    const supers = superSources(S, glossary);
     const srcHits = [];
     let srcCount = 0;
     sourceParas.forEach((p, i) => {
-      const count = countTermOccurrences(p, S);
+      const count = countTermOccurrences(maskSuperTerms(p, supers), S);
       if (count > 0) {
         srcHits.push({ index: i, text: p });
         srcCount += count;
@@ -733,8 +763,10 @@ app.post(
 
       for (const r of out.results) {
         if (r.entry.type !== 'term') continue;
+        // 상위 용어(예: "mad cow disease")에 포함된 짧은 용어("cow")는 그 문장을 미준수로 잡지 않음.
+        const supers = superSources(r.entry.source, glossary);
         const matches = alignedPairs.filter(
-          (p) => p.src && contains(p.src, r.entry.source)
+          (p) => p.src && contains(maskSuperTerms(p.src, supers), r.entry.source)
         );
         r.matchCount = r.srcCount != null ? r.srcCount : r.srcHits ? r.srcHits.length : matches.length;
         // 상한 없음 — 해당 문장 모두. ok=false(기대 번역어 미사용)가 수정 대상.

@@ -205,6 +205,27 @@ mark.missing {
 
 .note-line { font-size: 13px; color: #555; margin: 2px 0 6px; }
 
+/* 미준수 용어 탐색 바 (엑셀 형식) */
+.term-nav { margin: 12px 0 18px; }
+.term-nav-title { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.term-nav-table { border-collapse: collapse; }
+.term-nav-table td { border: 1px solid var(--border); padding: 0; }
+.term-nav-empty { background: #141518; }
+.term-nav-btn {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  background: #1a1c20;
+  color: var(--text);
+  border: none;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.term-nav-btn:hover { background: #2a3550; color: #cfe4ff; }
+
 .violation {
   background: #fff0f0;
   border-left: 3px solid #e05050;
@@ -537,6 +558,52 @@ td input {
 .style-chip.review { background: #fff1e0; color: #b5651d; }
 .style-chip.total { background: #eef0f2; color: #444; }
 .style-dominant { font-size: 14px; color: #333; margin-bottom: 6px; }
+
+/* 합격/불합격 판정 — 엑셀 형식 표 (용어 / 문체) */
+.verdict-bar { margin: 14px 0; }
+.verdict-table {
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.verdict-table td {
+  border: 1px solid var(--border);
+  padding: 8px 14px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 700;
+  min-width: 72px;
+}
+.verdict-table .verdict-label {
+  background: #272b33;
+  color: var(--muted);
+}
+.verdict-cell { color: #6b7280; background: #1a1c20; }
+.verdict-cell.pass.active { background: #1d7a3a; color: #fff; }
+.verdict-cell.fail.active { background: #c0392b; color: #fff; }
+.verdict-label.selected { outline: 2px solid #4a9eff; outline-offset: -2px; color: #cfe4ff; }
+
+/* 문체 헤더 + 요구 문체 선택 버튼 */
+.style-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.style-head .style-title { margin: 0; }
+.style-target { display: flex; align-items: center; gap: 6px; }
+.style-target-label { font-size: 13px; color: var(--muted); }
+.style-target-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  background: #1a1c20;
+  color: var(--text);
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.style-target-btn.active { background: #4a9eff; border-color: #4a9eff; color: #fff; font-weight: 700; }
 .style-warn {
   background: #fff3cd;
   border: 1px solid #ffe08a;

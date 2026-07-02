@@ -1,7 +1,9 @@
 # HANDOFF — 번역 준수 검수 웹앱 (작업 이어가기용)
 
 > 이 파일을 읽으면 바로 실행하고, 현재 구현 상태를 이해할 수 있도록 정리했습니다.
-> 마지막 갱신: 2026-07-02.
+> 마지막 갱신: 2026-07-02 (오후 세션 — 합격/불합격 판정 + 기준 선택 버튼 + 미준수 용어 탐색 바 + 부분일치 오탐 수정).
+>
+> **가장 최근 작업은 문서 맨 아래 "재개 지점 (2026-07-02 오후 세션)" 참고.** 미커밋 상태(로컬 작업본).
 
 ## 🚀 배포 상태 (2026-07-02 신규)
 - **라이브 URL**: https://translator-s-helper.vercel.app
@@ -153,3 +155,55 @@ Express 앱을 Vercel 서버리스 함수로 실행.
 - 현재 작업 상태는 `golden_set.md`와 `loop-log.md`에 정리되어 있음
 - 서버가 실행 중이면 브라우저에서 바로 확인 가능
 - `package.json`은 단순 `npm start` 실행 스크립트만 포함
+
+---
+
+## 재개 지점 (2026-07-02 오후 세션) ★최신★
+> 이 세션에서 추가/수정한 4가지. 모두 **로컬 미커밋** 상태(git 워킹트리에만 존재). `public/app.js`, `public/index.html`, `public/style.css`, `server.js` 수정됨.
+
+### 1. 합격/불합격 판정 표 (verdict bar) — 완료
+- 위치: `#styleSection` 안, `styleSummary` 밑 `#verdictBar` (index.html). 문체 검토 요약 바로 아래.
+- 엑셀 형식 표 한 줄: `용어 | 합격 | 불합격 | 평서체 | 합격 | 불합격 | 경어체 | 합격 | 불합격`.
+- 판정 로직 (`app.js > renderVerdict`):
+  - **용어 합격** = 모든 용어 그룹의 미준수율(%) 합계(`.term-rate` 입력값) == 0.
+  - **평서체 합격** = 경어체 문장 수 == 0 (전부 평서체).
+  - **경어체 합격** = 평서체 문장 수 == 0 (전부 경어체).
+  - 혼용이면 평서·경어 둘 다 불합격.
+  - 합격 셀=초록(`.verdict-cell.pass.active`), 불합격 셀=빨강(`.fail.active`). 실제 판정 셀만 색상.
+- ST/TT 수치 편집(`.term-st`/`.term-tt` input) 시 실시간 재판정 (resultArea input 리스너).
+- 관련: `app.js`(renderVerdict, lastStyleSummary), `style.css`(.verdict-*).
+
+### 2. 번역 준수 기준 선택 버튼 — 완료
+- 위치: 문체 제목 옆 `#styleTarget` (index.html `.style-head` 안). 라벨 "번역 준수 기준:" + 버튼 3개 `[용어집][평서체][경어체]`.
+- 규칙 (`app.js` styleTargetEl 클릭 핸들러):
+  - **용어집**: 독립 토글(on/off). `glossarySelected` (localStorage `glossarySelected`, 기본 on).
+  - **평서체/경어체**: 상호배타. `styleTarget`='plain'|'honorific'|'none' (localStorage `styleTarget`, 기본 plain). 같은 거 재클릭=해제, 다른 거 클릭=전환.
+  - → 유효 조합: 용어집 / 평서체 / 경어체 / 용어집+평서체 / 용어집+경어체. 평서+경어 동시선택 불가(모순 방지).
+- 선택된 기준 = verdict 표의 해당 라벨 셀에 파란 테두리(`.verdict-label.selected`) + 버튼 파란 강조(`.style-target-btn.active`).
+- 선택은 표시(강조)용. 합격/불합격 셀 색상 계산에는 영향 없음(항상 실제 판정 표시).
+
+### 3. 미준수 용어 탐색 바 — 완료
+- 위치: 수동검토 배너(`#noteBanner`)와 첫 `[미준수]` 그룹 사이 = `resultArea` 맨 위에 insert (`app.js > render`에서 `resultArea.insertBefore(buildTermNav(...), firstChild)`).
+- 엑셀 형식 표(`buildTermNav`), 최대 6열 → 미준수 용어 수 따라 행 자동 증가. 각 셀=버튼 `용어명 (곳수)`.
+- 클릭 시 해당 용어 수정 블록으로 스크롤. 각 term-group에 `id="termgrp-N"` 부여, 버튼 `data-goto`로 `scrollIntoView`. (resultArea click 리스너)
+- 관련: `app.js`(buildTermNav, render 내 navGroups/grpIdx/gid), `style.css`(.term-nav*).
+
+### 4. 부분일치(substring) 오탐 수정 — 완료
+- 문제: 용어 "cow"가 단어경계 매칭으로 "mad cow disease" 속 cow까지 잡아 미준수 오탐. 실제론 "mad cow disease"=광우병 별도 용어라 준수.
+- 해결 (`server.js`): 짧은 용어 검사 시 **그 용어를 부분으로 포함하는 더 긴 용어(상위 용어)** 출현부를 먼저 공백으로 가림.
+  - `superSources(term, glossary)`: 용어를 포함하는 더 긴 용어 목록.
+  - `maskSuperTerms(text, supers)`: 원문에서 상위 용어 span 길이보존 마스킹.
+  - 적용 지점 2곳: ① `checkGlossary` 원문 카운트(srcCount) ② `/api/check` 라우트 pair 매칭(`contains(maskSuperTerms(...), source)`).
+- **주의**: 상위 용어("mad cow disease")가 용어집에 실제 항목으로 있어야 작동. 단위 테스트로 로직 검증됨(cow 독립 검출 O, mad cow 속 cow 제외 O).
+
+### 다음에 바로 이어서 할 후보
+1. 실제 문서로 4가지 화면 눈 확인(특히 verdict 표 색상/테두리, 탐색 바 스크롤, cow 오탐 제거).
+2. 만족 시 커밋 + `npx vercel --prod --yes` 재배포 (현재 전부 미커밋).
+3. verdict "용어집 선택 해제 시 용어 합격/불합격을 판정에서 제외할지" 여부 결정(현재는 선택과 무관하게 항상 표시).
+4. 탐색 바 버튼에 현재 위치 하이라이트(선택 중인 용어 강조) 추가 여부.
+
+### 빠른 검증 체크리스트 (내일 시작 시)
+1. `npm start` → http://localhost:3000
+2. `fixtures/` 또는 실제 원문/번역 .docx 업로드 → 검수 시작
+3. 확인: (a) 미준수 용어 탐색 바가 맨 위에 뜨고 클릭 시 이동 (b) 문체 밑 verdict 표 정상 (c) 기준 버튼 토글 → 파란 테두리 이동 (d) "cow"류 부분일치 오탐 사라짐
+4. `node -c server.js` / `node -c public/app.js` = 문법 OK 확인됨

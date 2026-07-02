@@ -64,8 +64,17 @@
 
       <!-- 번역 준수 기준 — 문체(평서체/경어체) 검토: 용어집 아래 -->
       <section id="styleSection" class="style-section" hidden>
-        <h2 class="style-title">번역 준수 기준 — 문체(평서체 / 경어체) 검토</h2>
+        <div class="style-head">
+          <h2 class="style-title">번역 준수 기준 — 문체(평서체 / 경어체) 검토</h2>
+          <div id="styleTarget" class="style-target">
+            <span class="style-target-label">번역 준수 기준:</span>
+            <button type="button" class="style-target-btn" data-target="glossary">용어집</button>
+            <button type="button" class="style-target-btn" data-target="plain">평서체</button>
+            <button type="button" class="style-target-btn" data-target="honorific">경어체</button>
+          </div>
+        </div>
         <div id="styleSummary" class="style-summary"></div>
+        <div id="verdictBar" class="verdict-bar"></div>
         <div id="styleArea" class="style-area"></div>
       </section>
 

@@ -412,6 +412,37 @@ function markupTarget(text, terms) {
   return `<mark class="missing">${esc(source)}</mark>`;
 }
 
+// 미준수 용어 탐색 바(엑셀 형식) — 용어별 버튼, 클릭 시 수정 블록으로 이동
+function buildTermNav(groups) {
+  const wrap = document.createElement('div');
+  wrap.className = 'term-nav';
+  const cols = Math.min(groups.length, 6) || 1;
+  let html =
+    `<div class="term-nav-title">미준수 용어 ${groups.length} — 클릭 시 수정 위치로 이동</div>` +
+    `<table class="term-nav-table"><tbody>`;
+  for (let i = 0; i < groups.length; i += cols) {
+    html += '<tr>';
+    for (let j = 0; j < cols; j++) {
+      const g = groups[i + j];
+      html += g
+        ? `<td><button type="button" class="term-nav-btn" data-goto="${g.id}">${esc(g.term)} (${g.count})</button></td>`
+        : `<td class="term-nav-empty"></td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+  return wrap;
+}
+
+// 탐색 바 버튼 클릭 → 해당 미준수 용어 수정 블록으로 스크롤
+resultArea.addEventListener('click', (e) => {
+  const b = e.target.closest('.term-nav-btn');
+  if (!b) return;
+  const el = document.getElementById(b.dataset.goto);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
 function groupHead(label, title, status) {
   const d = document.createElement('div');
   d.className = 'term-head ' + status;
@@ -621,6 +652,8 @@ function render(data) {
   renderNoteBanner(noteFlags, manualTerms);
 
   let total = 0;
+  let grpIdx = 0;
+  const navGroups = []; // 미준수 용어 탐색 바용 {term, count, id}
   for (const r of termFlags) {
     const term = r.entry.source;
     const expected = r.entry.target;
@@ -630,8 +663,12 @@ function render(data) {
     if (bad.length === 0) continue;
     total += bad.length;
 
+    const gid = 'termgrp-' + grpIdx++;
+    navGroups.push({ term, count: bad.length, id: gid });
+
     const group = document.createElement('div');
     group.className = 'term-group';
+    group.id = gid;
     group.appendChild(
       groupHead('미준수', `${term} → 기대 번역어: ${expected} (${bad.length}곳)`, 'fail')
     );
@@ -648,8 +685,16 @@ function render(data) {
     resultArea.appendChild(group);
   }
 
+  // 미준수 용어 탐색 바 — 수동검토 배너와 [미준수] 그룹 사이(resultArea 맨 위)
+  if (navGroups.length) {
+    resultArea.insertBefore(buildTermNav(navGroups), resultArea.firstChild);
+  }
+
   // 문체(평서체/경어체) 검토 화면 — 용어집 결과 하단에 렌더
   renderStyle(data.style);
+
+  // 합격/불합격 판정 (용어 미준수율 합계 + 문체 비율) — 문체 검토 밑에 표시
+  renderVerdict();
 
   // build review list for navigation
   buildReviewList();
@@ -671,8 +716,98 @@ function render(data) {
 const styleSection = document.getElementById('styleSection');
 const styleSummary = document.getElementById('styleSummary');
 const styleArea = document.getElementById('styleArea');
+const verdictBar = document.getElementById('verdictBar');
 
 const STYLE_LABEL = { plain: '평서체', honorific: '경어체', review: '검토대상' };
+
+// 최근 문체 집계(합격/불합격 판정용)
+let lastStyleSummary = null;
+
+// 번역 준수 기준 선택 (기기별 저장)
+//  - 용어집: 독립 토글(on/off)
+//  - 문체: 평서체 / 경어체 상호배타(둘 다 선택 불가 = 모순). 'none' = 문체 미선택
+//  → 유효 조합: 용어집, 평서체, 경어체, 용어집+평서체, 용어집+경어체
+let styleTarget = localStorage.getItem('styleTarget') || 'plain'; // 'plain'|'honorific'|'none'
+let glossarySelected = localStorage.getItem('glossarySelected') !== '0'; // 기본 선택
+const styleTargetEl = document.getElementById('styleTarget');
+
+function syncStyleTargetButtons() {
+  if (!styleTargetEl) return;
+  styleTargetEl.querySelectorAll('.style-target-btn').forEach((b) => {
+    const t = b.dataset.target;
+    const on = t === 'glossary' ? glossarySelected : styleTarget === t;
+    b.classList.toggle('active', on);
+  });
+}
+
+if (styleTargetEl) {
+  styleTargetEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('.style-target-btn');
+    if (!btn) return;
+    const t = btn.dataset.target;
+    if (t === 'glossary') {
+      glossarySelected = !glossarySelected;
+      localStorage.setItem('glossarySelected', glossarySelected ? '1' : '0');
+    } else if (t === 'plain' || t === 'honorific') {
+      // 같은 문체 재클릭 → 해제. 다른 문체 클릭 → 전환(상호배타)
+      styleTarget = styleTarget === t ? 'none' : t;
+      localStorage.setItem('styleTarget', styleTarget);
+    } else {
+      return;
+    }
+    syncStyleTargetButtons();
+    renderVerdict();
+  });
+  syncStyleTargetButtons();
+}
+
+// ---------- 합격/불합격 판정 (용어 미준수율 합계 + 문체 통일) ----------
+// 용어: 모든 용어 그룹의 미준수율(%) 합계 == 0 → 합격
+// 문체: 문서가 한 문체로 통일되면 합격 = 다른 문체 문장 0
+//   - 평서체 기준 합격 = 경어체 0  (전부 평서체)
+//   - 경어체 기준 합격 = 평서체 0  (전부 경어체)
+//   요구 문체(styleTarget) 셀이 선택 강조되며, 그 셀의 합격/불합격이 실제 판정.
+function renderVerdict() {
+  if (!verdictBar) return;
+
+  // 용어 미준수율 합계
+  const rateInputs = Array.from(resultArea.querySelectorAll('.term-rate'));
+  const totalRate = rateInputs.reduce((sum, el) => sum + (parseFloat(el.value) || 0), 0);
+  const termPass = totalRate < 1e-6;
+
+  // 문체 집계
+  const s = lastStyleSummary || {};
+  const plain = s.plain || 0;
+  const honorific = s.honorific || 0;
+  const plainPass = honorific === 0;     // 전부 평서체면 평서체 기준 합격
+  const honorificPass = plain === 0;     // 전부 경어체면 경어체 기준 합격
+
+  const cell = (pass, active) =>
+    `<td class="verdict-cell ${pass ? 'pass' : 'fail'}${active ? ' active' : ''}">` +
+    `${pass ? '합격' : '불합격'}</td>`;
+  const label = (selected, text) =>
+    `<td class="verdict-label${selected ? ' selected' : ''}">${text}</td>`;
+
+  verdictBar.innerHTML =
+    `<table class="verdict-table"><tbody><tr>` +
+    label(glossarySelected, '용어') +
+    cell(true, termPass) +
+    cell(false, !termPass) +
+    label(styleTarget === 'plain', '평서체') +
+    cell(true, plainPass) +
+    cell(false, !plainPass) +
+    label(styleTarget === 'honorific', '경어체') +
+    cell(true, honorificPass) +
+    cell(false, !honorificPass) +
+    `</tr></tbody></table>`;
+}
+
+// 용어 통계(ST/TT) 수정 시 판정 갱신
+resultArea.addEventListener('input', (e) => {
+  if (e.target.classList && (e.target.classList.contains('term-st') || e.target.classList.contains('term-tt'))) {
+    renderVerdict();
+  }
+});
 
 function renderStyle(style) {
   if (!styleSection || !styleSummary || !styleArea) return;
@@ -680,11 +815,13 @@ function renderStyle(style) {
   styleArea.innerHTML = '';
   if (!style || !style.items) {
     styleSection.hidden = true;
+    lastStyleSummary = null;
     return;
   }
   styleSection.hidden = false;
 
   const s = style.summary || {};
+  lastStyleSummary = s;
   const domLabel = s.dominant && STYLE_LABEL[s.dominant] ? STYLE_LABEL[s.dominant] : '없음';
 
   // 요약: 분류 집계 + 주문체 + 혼용 경고
