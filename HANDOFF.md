@@ -196,8 +196,19 @@ Express 앱을 Vercel 서버리스 함수로 실행.
   - 적용 지점 2곳: ① `checkGlossary` 원문 카운트(srcCount) ② `/api/check` 라우트 pair 매칭(`contains(maskSuperTerms(...), source)`).
 - **주의**: 상위 용어("mad cow disease")가 용어집에 실제 항목으로 있어야 작동. 단위 테스트로 로직 검증됨(cow 독립 검출 O, mad cow 속 cow 제외 O).
 
+### 5. 큰 .docx 온라인 검수 (Vercel 4.5MB 한도 우회) — 완료·배포됨
+- 문제: Vercel 서버리스 요청 본문 4.5MB 한도. 이미지 많은 .docx(예 19MB)는 413(plaintext) → 클라 JSON.parse 실패("Unexpected token 'R'...").
+- 해결: 합계 파일 크기 > 4MB이면 **브라우저에서 텍스트 추출**(JSZip+DOMParser, `word/document.xml` 파싱) → 작은 JSON을 `/api/check-text`로 전송. 19MB → 약 326KB.
+  - `public/index.html`: JSZip CDN 추가.
+  - `public/app.js`: `extractUnitsClient`/`xmlBilingualPairs`/`xmlParagraphs`/`docxToXmlDoc`(서버 mammoth 로직 미러), `performCheck`에서 `BIG_FILE_BYTES`(4MB) 기준 분기.
+  - `server.js`: `/api/check-text`(JSON srcUnits/tgtUnits) + 공통 파이프라인 `resolveGlossary`/`buildCheckResult`로 리팩터(기존 `/api/check`도 이걸 사용).
+- 작은 파일은 기존 mammoth 경로(`/api/check`, 검증됨) 그대로 사용.
+- **한계**: 텍스트 추출 경로는 원본 파일이 서버에 없어 **수정본(.docx) 다운로드 불가** → 그 경우 `exportBtn` 비활성 + 안내. 큰 파일 수정본은 로컬(`npm start`)에서.
+- 검증: 로컬 `/api/check`(19MB) vs `/api/check-text` 검수 수치 일치(fail7/warn3/manual2/pass20/checked32/style725). 라이브(https://translator-s-helper.vercel.app/api/check-text)도 동일 결과 200 확인.
+- 배포 커밋: `13be046` (그 전 `c704dc6` = 4가지 UI 기능). 둘 다 main + Vercel prod 반영됨.
+
 ### 다음에 바로 이어서 할 후보
-1. 실제 문서로 4가지 화면 눈 확인(특히 verdict 표 색상/테두리, 탐색 바 스크롤, cow 오탐 제거).
+1. 실제 문서로 4가지 화면 눈 확인(특히 verdict 표 색상/테두리, 탐색 바 스크롤, cow 오탐 제거) + **큰 파일 온라인 업로드 E2E**(브라우저 추출→검수 결과 렌더) 눈 확인.
 2. 만족 시 커밋 + `npx vercel --prod --yes` 재배포 (현재 전부 미커밋).
 3. verdict "용어집 선택 해제 시 용어 합격/불합격을 판정에서 제외할지" 여부 결정(현재는 선택과 무관하게 항상 표시).
 4. 탐색 바 버튼에 현재 위치 하이라이트(선택 중인 용어 강조) 추가 여부.
